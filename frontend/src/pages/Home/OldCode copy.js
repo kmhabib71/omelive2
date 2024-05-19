@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 // import socket from "../../socket";
 import io from "socket.io-client";
@@ -7,7 +7,8 @@ function Home() {
   // .........For Socket.io............
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(new MediaStream());
-  const [peerConnection, setPeerConnection] = useState(null);
+  // const [peerConnection, setPeerConnection] = useState(null);
+  const peerConnection = useRef(null);
   const [sendChannel, setSendChannel] = useState(null);
   const [receiveChannel, setReceiveChannel] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
@@ -24,18 +25,8 @@ function Home() {
   const [waitingMessage, setWaitingMessage] = useState("");
   const [iceCandidatesBuffer, setIceCandidatesBuffer] = useState([]);
   const [initiateOffer, setInitiateOffer] = useState(false);
-  // const onCandidateReceiver = (data) => {
-  //   if (peerConnection && peerConnection.remoteDescription) {
-  //     peerConnection
-  //       .addIceCandidate(data.iceCandidateData)
-  //       .catch(console.error);
-  //   } else {
-  //     setIceCandidatesBuffer((prevBuffer) => [
-  //       ...prevBuffer,
-  //       data.iceCandidateData,
-  //     ]);
-  //   }
-  // };
+  const [isSocketConnected, setIsSocketConnected] = useState(false); // New state
+  const [isReadyToFindUser, setIsReadyToFindUser] = useState(false);
   const addBufferedIceCandidates = () => {
     iceCandidatesBuffer.forEach((candidate) => {
       peerConnection.addIceCandidate(candidate).catch(console.error);
@@ -45,137 +36,200 @@ function Home() {
   const scrollToBottom = () => {
     messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
+
   useEffect(() => {
     scrollToBottom();
   }, [chatMessages]);
-  const startChatHandler = async (otherUserId) => {
-    console.log("remoteuser id from startChatHandle: ", otherUserId);
-    setRemoteUser(otherUserId); // Correctly update the state
-    setInitiateOffer(true);
-    if (!localStream) {
-      console.error("Local stream is not initialized.");
-      return;
-    }
-    // await createOffer(otherUserId);
-  };
-  const startChatHandlerForReceiver = async (otherUserId) => {
-    console.log("remoteuser for user2: ", otherUserId);
-    setRemoteUser(otherUserId); // Correctly update the state
-    if (!localStream) {
-      console.error("Local stream is not initialized.");
-      return;
-    }
-    // await createOffer(otherUserId);
-  };
-
   useEffect(() => {
-    // Only try to create an offer if both localStream and remoteUser are ready
-    if (localStream && initiateOffer) {
-      const callCreateOffer = async () => {
-        // console.log("remoteUser: ", remoteUser);
-        // console.log("localStream: ", localStream);
-        await createOffer(remoteUser);
-      };
-      callCreateOffer();
-    }
-  }, [localStream, initiateOffer]);
-  useEffect(() => {
-    // Whenever remoteStream changes, update the video element's srcObject
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    if (remoteStream) {
+      const remoteVideo = document.getElementById("user-2");
+      console.log("document.getelementbyID");
+      if (remoteVideo) {
+        remoteVideo.srcObject = remoteStream;
+      }
     }
   }, [remoteStream]);
+
   useEffect(() => {
-    const init = async () => {
+    if (initiateOffer && remoteUser) {
+      const createOffer = async () => {
+        if (!localStream) {
+          console.error("Local stream is not initialized.");
+          return;
+        }
+
+        const peerConnection = await createPeerConnection();
+
+        if (!peerConnection) {
+          console.error("Peer connection is not initialized.");
+          return;
+        }
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        console.log("Offer created: ", offer);
+
+        socket.current.emit("offerSentToRemote", {
+          username: username,
+          remoteUser: remoteUser,
+          offer: peerConnection.localDescription,
+        });
+      };
+
+      createOffer();
+    }
+  }, [initiateOffer, remoteUser]);
+
+  useEffect(() => {
+    if (localStream && isSocketConnected && username !== "") {
+      setIsReadyToFindUser(true);
+    }
+  }, [localStream, isSocketConnected, username]);
+
+  useEffect(() => {
+    if (isReadyToFindUser) {
+      socket.current.emit("findUnengagedUser", {
+        username: username,
+      });
+    } else {
+      console.log("username is: ", username);
+    }
+  }, [isReadyToFindUser]);
+
+  useEffect(() => {
+    const initMediaDevices = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
         });
-        // console.log("sream is :", stream);
+
         setLocalStream(stream);
         localVideoRef.current.srcObject = stream;
-
-        socket.current.emit("findUnengagedUser", {
-          username: username,
-        });
-        socket.current.on("noUnengagedUsers", (data) => {
-          setWaitingMessage(data.message);
-        });
-        socket.current.on("startChat", startChatHandler);
-        socket.current.on("startChatForReceiver", startChatHandlerForReceiver);
       } catch (error) {
         console.error("Error accessing media devices:", error);
       }
     };
-    init();
+
+    initMediaDevices();
 
     return () => {
-      socket.current.off("startChat", startChatHandler); // Remove the specific event listener
-      socket.current.off("noUnengagedUsers");
-    };
-  }, []);
-  useEffect(() => {
-    socket.current = io.connect("http://localhost:5000");
-    socket.current.on("connect_error", (error) => {
-      console.error("Connection Error:", error);
-    });
-
-    socket.current.on("connect", () => {
-      console.log("The Socket is connected");
-    });
-
-    socket.current.on("mySocketId", (socketId) => {
-      if (socket.current.connected) {
-        setUsername(socketId);
-        socket.current.emit("userconnect", {
-          displayName: socketId,
-        });
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
       }
-      console.log("My Socket ID:", socketId);
-    });
-
-    // Add other socket event listeners here
-
-    return () => {
-      // Clean up  when component unmount
-      // Clean up
-      localStream?.getTracks().forEach((track) => track.stop());
-      remoteStream?.getTracks().forEach((track) => track.stop());
-      peerConnection?.close();
-      socket.current.disconnect();
+      const currentPeerConnection = peerConnection.current;
+      if (currentPeerConnection) {
+        currentPeerConnection.close();
+      }
+      if (socket.current) {
+        socket.current.disconnect();
+      }
     };
-  }, []);
+  }, []); // Empty dependency array to ensure it runs only once
 
-  // Function to handle incoming chat messages
+  const startChatHandler = useCallback(
+    async (otherUserId) => {
+      console.log("remoteuser id from startChatHandle: ", otherUserId);
+      setRemoteUser(otherUserId); // Correctly update the state
+      setInitiateOffer(true);
+      if (!localStream) {
+        console.error("Local stream is not initialized.");
+        return;
+      }
+      // await createOffer(otherUserId);
+    },
+    [localStream]
+  );
 
-  // Function to handle state changes of the receive channel
-  const onReceiveChannelStateChange = (event) => {
-    console.log("Receive channel state is: " + event.target.readyState);
-  };
+  const startChatHandlerForReceiver = useCallback(
+    async (otherUserId) => {
+      console.log(
+        "remoteuser for user2 from startChatHandlerForReceiver: ",
+        otherUserId
+      );
+      setRemoteUser(otherUserId); // Correctly update the state
+      if (!localStream) {
+        console.error("Local stream is not initialized.");
+        return;
+      }
+      // await createOffer(otherUserId);
+    },
+    [localStream]
+  );
 
-  // Function to handle state changes of the send channel
-  const onSendChannelStateChange = (event) => {
-    console.log("Send channel state is: " + event.target.readyState);
-  };
+  useEffect(() => {
+    if (localStream && !isSocketConnected) {
+      const connectBackendSocket = () => {
+        socket.current = io.connect("http://localhost:5000");
+
+        socket.current.on("connect_error", (error) => {
+          console.error("Connection Error:", error);
+        });
+
+        socket.current.on("connect", () => {
+          console.log("The Socket is connected");
+        });
+
+        socket.current.on("mySocketId", (socketId) => {
+          if (socket.current.connected) {
+            setUsername(socketId);
+            socket.current.emit("userconnect", {
+              displayName: socketId,
+            });
+          }
+          console.log("My Socket ID:", socketId);
+        });
+
+        socket.current.on("noUnengagedUsers", (data) => {
+          setWaitingMessage(data.message);
+        });
+
+        socket.current.on("startChat", startChatHandler);
+        socket.current.on("startChatForReceiver", startChatHandlerForReceiver);
+        socket.current.on("noAvailableUsers", () => {
+          console.log("No available users at the moment.");
+          setWaitingMessage("No available users at the moment. Please wait...");
+        });
+        setIsSocketConnected(true); // Mark socket as connected
+      };
+
+      connectBackendSocket();
+    }
+  }, [
+    localStream,
+    isSocketConnected,
+    startChatHandler,
+    startChatHandlerForReceiver,
+  ]);
+  // // Function to handle incoming chat messages
+
+  // // Function to handle state changes of the receive channel
+  // const onReceiveChannelStateChange = (event) => {
+  //   console.log("Receive channel state is: " + event.target.readyState);
+  // };
+
+  // // Function to handle state changes of the send channel
+  // const onSendChannelStateChange = (event) => {
+  //   console.log("Send channel state is: " + event.target.readyState);
+  // };
 
   // Function to fetch the next user
   const fetchNextUser = (remoteUser) => {
-    console.log("fetchNextUser: ", {
-      username: username,
-      remoteUser: remoteUser,
-    });
-    socket.current.emit("findNextUnengagedUser", {
-      username: username,
-      remoteUser: remoteUser,
-    });
+    // console.log("fetchNextUser: ", {
+    //   username: username,
+    //   remoteUser: remoteUser,
+    // });
+    // socket.current.emit("findNextUnengagedUserr", {
+    //   username: username,
+    //   remoteUser: remoteUser,
+    // });
   };
-
   const createPeerConnection = async () => {
     if (!localStream) {
       console.error("Local stream is not initialized.");
       return;
     }
+
     const servers = {
       iceServers: [
         {
@@ -188,77 +242,63 @@ function Home() {
     };
 
     const newPeerConnection = new RTCPeerConnection(servers);
-    setPeerConnection(newPeerConnection);
+    peerConnection.current = newPeerConnection; // Update the ref instead of state
 
     localStream.getTracks().forEach((track) => {
       newPeerConnection.addTrack(track, localStream);
     });
 
+    let remoteStreamTemp = new MediaStream(); // Temporary variable to hold the remote stream
+
     newPeerConnection.ontrack = (event) => {
-      // console.log("event.streams[0] :", event.streams[0]);
-      event.streams[0].getTracks().forEach((track) => {
-        const newRemoteStream = new MediaStream([
-          ...remoteStream.getTracks(),
-          track,
-        ]);
-        setRemoteStream(newRemoteStream);
-        setWaitingMessage("");
-        console.log("remoteUser is: ", remoteUser);
-      });
+      const [stream] = event.streams;
+      remoteStreamTemp = stream; // Store the stream temporarily
+      console.log("Received remote stream:", remoteStreamTemp);
     };
 
     newPeerConnection.onicecandidate = (event) => {
-      console.log("newPeerConnection.onicecandidate triggered with event");
       if (event.candidate) {
-        socket.current.emit("candidateSentToUser", {
-          username: username,
-          remoteUser: remoteUser,
-          iceCandidateData: event.candidate,
-        });
+        if (remoteUser) {
+          socket.current.emit("candidateSentToUser", {
+            username: username,
+            remoteUser: remoteUser,
+            iceCandidateData: event.candidate,
+          });
+        } else {
+          console.error("remoteUser is not set when sending ICE candidate");
+        }
       }
     };
 
-    const newSendChannel =
-      newPeerConnection.createDataChannel("sendDataChannel");
-    setSendChannel(newSendChannel);
-
-    newSendChannel.onopen = () => {
-      console.log("Send data channel is now open and ready to use");
+    newPeerConnection.oniceconnectionstatechange = () => {
+      if (
+        peerConnection.current.iceConnectionState === "connected" ||
+        peerConnection.current.iceConnectionState === "completed"
+      ) {
+        console.log(
+          "ICE connection state:",
+          peerConnection.current.iceConnectionState
+        );
+        if (
+          remoteStreamTemp &&
+          peerConnection.current.getReceivers().length > 0
+        ) {
+          setRemoteStream(remoteStreamTemp); // Set the remote stream only after successful ICE connection
+          setWaitingMessage("");
+          const remoteVideo = document.getElementById("user-2");
+          console.log("document.getelementbyID");
+          if (remoteVideo) {
+            remoteVideo.srcObject = remoteStream;
+          }
+          console.log(
+            "Remote video stream set after successful negotiation:",
+            remoteStreamTemp
+          );
+        }
+      }
     };
-    newSendChannel.onstatechange = onSendChannelStateChange;
 
-    newPeerConnection.ondatachannel = (event) => {
-      const receiveChannel = event.channel;
-      setReceiveChannel(receiveChannel);
-      receiveChannel.onmessage = onReceiveChannelMessageCallback;
-      receiveChannel.onstatechange = onReceiveChannelStateChange;
-    };
     return newPeerConnection;
-  };
-  const createOffer = async (remoteU) => {
-    if (!localStream) {
-      console.error("Local stream is not initialized.");
-      return;
-    }
-
-    // Call createPeerConnection and use the returned object
-    const peerConnection = await createPeerConnection();
-
-    if (!peerConnection) {
-      console.error("Peer connection is not initialized.");
-      return;
-    }
-
-    // Now you can use peerConnection to create an offer
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    console.log("Offer created");
-    // Emit the offer using the socket instance
-    socket.current.emit("offerSentToRemote", {
-      username: username,
-      remoteUser: remoteU,
-      offer: peerConnection.localDescription,
-    });
   };
 
   // sendData function
@@ -275,67 +315,93 @@ function Home() {
     }
   };
 
-  // receiveChannelCallback function
-  const receiveChannelCallback = (event) => {
-    console.log("Receive Channel Callback");
-    const channel = event.channel;
-    setReceiveChannel(channel);
+  // // receiveChannelCallback function
+  // const receiveChannelCallback = (event) => {
+  //   console.log("Receive Channel Callback");
+  //   const channel = event.channel;
+  //   setReceiveChannel(channel);
 
-    channel.onmessage = onReceiveChannelMessageCallback;
-    channel.onopen = () => onReceiveChannelStateChange(channel);
-    channel.onclose = () => onReceiveChannelStateChange(channel);
-  };
+  //   channel.onmessage = onReceiveChannelMessageCallback;
+  //   channel.onopen = () => onReceiveChannelStateChange(channel);
+  //   channel.onclose = () => onReceiveChannelStateChange(channel);
+  // };
   const createAnswer = async (data) => {
-    const peerConnection = await createPeerConnection();
-    if (!peerConnection) {
+    await createPeerConnection(); // This will set peerConnection.current
+
+    if (!peerConnection.current) {
       console.error("Peer connection is not initialized.");
       return;
     }
 
-    await peerConnection.setRemoteDescription(data.offer);
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    addBufferedIceCandidates();
+    try {
+      await peerConnection.current.setRemoteDescription(
+        new RTCSessionDescription(data.offer)
+      );
+      const answer = await peerConnection.current.createAnswer();
+      await peerConnection.current.setLocalDescription(answer);
+      addBufferedIceCandidates();
 
-    socket.current.emit("answerSentToUser1", {
-      answer: answer,
-      sender: data.remoteUser,
-      receiver: data.username,
-    });
-    console.log("answer created and sent to user1");
-    // Update the UI state to reflect that the next chat can be started
-    setNextChatEnabled(true); // Assuming you have a state to control this
+      socket.current.emit("answerSentToUser1", {
+        answer: answer,
+        sender: data.remoteUser,
+        receiver: data.username,
+      });
+      console.log("Answer created and sent to user1:", answer);
+
+      // Update the UI state to reflect that the next chat can be started
+      setNextChatEnabled(true);
+    } catch (error) {
+      console.error("Failed to create answer:", error);
+    }
   };
 
   useEffect(() => {
-    socket.current.on("ReceiveOffer", (data) => {
-      console.log("Offer Received");
-      createAnswer(data);
-    });
+    if (socket.current) {
+      socket.current.on("ReceiveOffer", (data) => {
+        console.log("Offer Received: ", data);
+        createAnswer(data);
+      });
 
-    // Clean up the event listener when the component unmounts
-    return () => {
-      socket.current.off("ReceiveOffer");
-    };
+      // Clean up the event listener when the component unmounts
+      return () => {
+        socket.current.off("ReceiveOffer");
+      };
+    }
   }, [localStream]);
   const onReceiveAnswer = (data) => {
     console.log("answer Received");
     // Assuming addAnswer is a function that handles the received answer
     addAnswer(data);
   };
+  const onCandidateReceiver = async (data) => {
+    console.log("from onCandidateReceiver");
+    try {
+      if (
+        peerConnection.current &&
+        peerConnection.current.signalingState !== "closed"
+      ) {
+        await peerConnection.current.addIceCandidate(data.iceCandidateData);
+        console.log("ICE candidate added successfully");
+      } else {
+        console.error("Cannot add ICE candidate, signalingState is closed");
+      }
+    } catch (error) {
+      console.error("Failed to add ICE candidate:", error);
+    }
+  };
   useEffect(() => {
     const onClosedRemoteUser = (data) => {
-      // alert("closed remote user");
       console.log("closedUser is: ", data);
-      // Stop all tracks on the remote stream
 
+      // Stop all tracks on the remote stream
       if (remoteStream) {
         remoteStream.getTracks().forEach((track) => track.stop());
       }
 
       // Close the peer connection
-      if (peerConnection) {
-        peerConnection.close();
+      if (peerConnection.current) {
+        peerConnection.current.close();
+        peerConnection.current = null; // Reset the ref
       }
 
       // Clear the chat area and stop the remote video stream
@@ -344,33 +410,30 @@ function Home() {
 
       // Log the closure of the remote user and fetch the next user
       console.log("Closed Remote user");
-      fetchNextUser(remoteUser); // Assuming fetchNextUser is defined to handle this
+      // fetchNextUser(data.remoteUser); // Assuming fetchNextUser is defined to handle this
+      socket.current.emit("findUnengagedUser", {
+        username: username,
+      });
+
+      // Reset remoteUser state
       setRemoteUser("");
     };
 
-    const onCandidateReceiver = async (data) => {
-      try {
-        if (peerConnection && peerConnection.signalingState !== "closed") {
-          await peerConnection.addIceCandidate(data.iceCandidateData);
-          console.log("ICE candidate added successfully");
-        } else {
-          console.error("Cannot add ICE candidate, signalingState is closed");
-        }
-      } catch (error) {
-        console.error("Failed to add ICE candidate:", error);
-      }
-    };
-
     // Set up the socket event listeners
-    socket.current.on("ReceiveAnswer", onReceiveAnswer);
-    socket.current.on("closedRemoteUser", onClosedRemoteUser);
-    socket.current.on("candidateReceiver", onCandidateReceiver);
+    if (socket.current) {
+      socket.current.on("ReceiveAnswer", onReceiveAnswer);
 
+      socket.current.on("closedRemoteUser", onClosedRemoteUser);
+      socket.current.on("candidateReceiver", onCandidateReceiver);
+    }
     // Clean up the event listeners when the component unmounts
     return () => {
-      socket.current.off("ReceiveAnswer", onReceiveAnswer);
-      // socket.current.off("closedRemoteUser", onClosedRemoteUser);
-      // socket.current.off("candidateReceiver", onCandidateReceiver);
+      if (socket.current) {
+        socket.current.off("ReceiveAnswer", onReceiveAnswer);
+
+        socket.current.off("closedRemoteUser", onClosedRemoteUser);
+        socket.current.off("candidateReceiver", onCandidateReceiver);
+      }
     };
   }, [
     remoteStream,
@@ -380,18 +443,42 @@ function Home() {
     fetchNextUser,
     remoteUser,
   ]);
-  // useEffect(() => {
-  //   console.log("remoteuserrrrrrrrrr: ", remoteUser);
-  // }, [remoteUser]);
+  // // useEffect(() => {
+  // //   console.log("remoteuserrrrrrrrrr: ", remoteUser);
+  // // }, [remoteUser]);
   const addAnswer = async (data) => {
-    if (peerConnection && !peerConnection.currentRemoteDescription) {
-      console.log("addAnswer");
-      await peerConnection.setRemoteDescription(data.answer);
+    if (!peerConnection.current) {
+      console.error("Peer connection is not initialized.");
+      return;
+    }
+
+    const signalingState = peerConnection.current.signalingState;
+    console.log(`Current signaling state: ${signalingState}`);
+
+    if (
+      signalingState !== "have-local-offer" &&
+      signalingState !== "have-remote-offer"
+    ) {
+      console.error(
+        `Cannot set remote description in state: ${signalingState}`
+      );
+      return;
+    }
+
+    try {
+      console.log("addAnswer: ", data);
+      await peerConnection.current.setRemoteDescription(
+        new RTCSessionDescription(data.answer)
+      );
+      console.log("Remote description set successfully.");
       addBufferedIceCandidates();
       // Update the UI state to reflect that the next chat can be started
       setNextChatEnabled(true); // Assuming you have a state to control this
+    } catch (error) {
+      console.error("Failed to set remote description: ", error);
     }
   };
+
   const closeConnection = async () => {
     try {
       // Stop all tracks on the remote stream if it exists
@@ -400,37 +487,20 @@ function Home() {
       setRemoteStream(new MediaStream());
 
       // Close the peer connection if it exists
-      if (peerConnection) {
-        await peerConnection.close();
-        setPeerConnection(null);
+      if (peerConnection.current) {
+        peerConnection.current.close();
+        peerConnection.current = null; // Reset the ref
       }
 
       // Emit the 'remoteUserClosed' event using the socket instance
-      // if (socket.current) {
-      //   socket.current.emit("remoteUserClosed", {
-      //     username: username,
-      //     remoteUser: remoteUser,
-      //   });
-      // }
-
-      // // Fetch the next user
-      // fetchNextUser(remoteUser);
       if (socket.current) {
         console.log("Close Emit first");
-        socket.current.emit(
-          "remoteUserClosed",
-          {
-            username: username,
-            remoteUser: remoteUser,
-          },
-          () => {
-            // This callback is called by the server as an acknowledgment
-            // Now it's safe to fetch the next user
-            console.log("Then fetch next user");
-            fetchNextUser(remoteUser);
-          }
-        );
+        socket.current.emit("remoteUserClosed", {
+          username: username,
+          remoteUser: remoteUser,
+        });
       }
+
       setRemoteUser("");
     } catch (error) {
       console.error("Error in closeConnection:", error);
@@ -446,14 +516,15 @@ function Home() {
       console.log("Start Chat button clicked, but not ready for next chat.");
     }
   };
-  const onReceiveChannelMessageCallback = (event) => {
-    console.log("Received Message");
-    // Update the chat messages state with the new message
-    setChatMessages((prevMessages) => [
-      ...prevMessages,
-      { sender: "Stranger", message: event.data },
-    ]);
-  };
+
+  // const onReceiveChannelMessageCallback = (event) => {
+  //   console.log("Received Message");
+  //   // Update the chat messages state with the new message
+  //   setChatMessages((prevMessages) => [
+  //     ...prevMessages,
+  //     { sender: "Stranger", message: event.data },
+  //   ]);
+  // };
   const stopTransmission = () => {
     socket.current.emit("remoteUseStopChat", {
       username: username,

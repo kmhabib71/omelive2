@@ -12,6 +12,7 @@ import { AuthContext } from "../Auth/AuthProvider";
 import axios from "axios";
 import { toast } from "react-toastify";
 import countries from "../../Data/countries.json";
+const backendUrl = process.env.REACT_APP_BACKEND_URL;
 function Home() {
   const { isLoggedIn, authUser } = useContext(AuthContext);
   const userid = authUser._id;
@@ -173,7 +174,7 @@ function Home() {
   useEffect(() => {
     if (localStream && !isSocketConnected) {
       const connectBackendSocket = () => {
-        socket.current = io.connect("http://localhost:5000");
+        socket.current = io.connect(backendUrl);
 
         socket.current.on("connect_error", (error) => {
           console.error("Connection Error:", error);
@@ -637,7 +638,7 @@ function Home() {
     setGender(gender);
     setGenderOpen(false);
     axios
-      .put(`http://localhost:5000/api/gender/${userid}`, {
+      .put(`${backendUrl}/api/gender/${userid}`, {
         userGender: gender,
       })
       .then((response) => {
@@ -712,7 +713,7 @@ function Home() {
     setLanguage(language);
     setLanguageOpen(false);
     axios
-      .put(`http://localhost:5000/api/language/${userid}`, {
+      .put(`${backendUrl}/api/language/${userid}`, {
         userLanguage: language,
       })
       .then((response) => {
@@ -791,7 +792,7 @@ function Home() {
     setCountryOpen(false);
 
     axios
-      .put(`http://localhost:5000/api/country/${userid}`, {
+      .put(`${backendUrl}/api/country/${userid}`, {
         userCountry: country,
       })
       .then((response) => {

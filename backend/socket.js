@@ -89,22 +89,27 @@ const initializeSocket = async (server) => {
         }
       }
     });
-
     socket.on("findNextUnengagedUser", (data) => {
       console.log("findNextUnengagedUser data: ", data);
+
+      // Filter available users excluding the current user and the previous remote user
       const availableUsers = userConnection.filter(
         (user) =>
           !user.engaged &&
           user.connectionId !== socket.id &&
           user.connectionId !== data.remoteUser
       );
-      availableUsers.map(function (user) {
+
+      // Log the available users for debugging
+      availableUsers.forEach((user) => {
         console.log({
           "availableUsers: ": user.user_id,
           Engaged: user.engaged,
         });
       });
+
       if (availableUsers.length > 0) {
+        // Randomly select a user from the available users
         const randomUserIndex = Math.floor(
           Math.random() * availableUsers.length
         );
@@ -113,15 +118,28 @@ const initializeSocket = async (server) => {
           (user) => user.connectionId === socket.id
         );
 
+        if (currentUserIndex === -1) {
+          console.error("Current user not found in userConnection array.");
+          socket.emit("error", { message: "Current user not found." });
+          return;
+        }
+
+        // Update the engagement status for both users
         userConnection[randomUserIndex].engaged = true;
         userConnection[randomUserIndex].engagedWith = socket.id; // Store engaged pair information
         userConnection[currentUserIndex].engaged = true;
         userConnection[currentUserIndex].engagedWith = randomUser.connectionId; // Store engaged pair information
 
+        // Notify both users to start the chat
         io.to(socket.id).emit("startChat", randomUser.connectionId);
         io.to(randomUser.connectionId).emit("startChatForReceiver", socket.id);
+        console.log(
+          `User ${socket.id} is now engaged with ${randomUser.connectionId}`
+        );
       } else {
+        // Notify the user that no available users are found
         socket.emit("noAvailableUsers");
+        console.log("No available users at the moment.");
       }
     });
 
@@ -213,31 +231,45 @@ const initializeSocket = async (server) => {
 
     socket.on("remoteUserClosed", (data, callback) => {
       // Find the remote user who closed the connection
-      var closedUser = userConnection.find(
+      const closedUser = userConnection.find(
         (user) => user.user_id === data.remoteUser
       );
+
       // Find the current user who clicked the "next" button
-      var currentUser = userConnection.find(
+      const currentUser = userConnection.find(
         (user) => user.connectionId === socket.id
       );
 
       // If the closed user is found, set their engaged status to false
       if (closedUser) {
         closedUser.engaged = false;
+        delete closedUser.engagedWith; // Ensure to clear the engagedWith field
         console.log("closed user data: ", data);
-        socket.to(closedUser.connectionId).emit("closedRemoteUser", data);
+        socket.to(closedUser.connectionId).emit("closedRemoteUser", {
+          message: "Remote user has moved to the next chat.",
+          remoteUser: socket.id,
+        });
       }
 
-      // Also set the engaged status of the current user to false
+      // Also set the engaged status of the current user to false and clear engagedWith
       if (currentUser) {
         currentUser.engaged = false;
+        delete currentUser.engagedWith; // Ensure to clear the engagedWith field
       }
-      console.log("All users from remoteUserClosed: ", userConnection);
+
+      console.log(
+        "all users status: ",
+        userConnection.map(function (user) {
+          return { "userid: ": user.user_id, Engaged: user.engaged };
+        })
+      );
+
       // Perform any additional server-side cleanup here
 
       // Once done, call the acknowledgment callback
-      callback();
+      // callback();
     });
+
     socket.on("remoteUseStopChat", (data) => {
       // Find the remote user who closed the connection
       var closedUser = userConnection.find(

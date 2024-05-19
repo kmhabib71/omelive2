@@ -28,7 +28,7 @@ function SignIn() {
         window.location.href = "/";
       }
     } catch (error) {
-      console.log("Error registering user: ", error);
+      console.log("Error Signing In user: ", error);
       toast.error("Error Signing In user, Check email and password");
     }
   };
