@@ -146,7 +146,7 @@ const initializeSocket = async (server) => {
       }
     });
     socket.on("candidateSentToUser", (data) => {
-      console.log("candidateSentToUser");
+      console.log("candidateSentToUser :");
       var candidateReceiver = userConnection.find(
         (o) => o.user_id === data.remoteUser
       );

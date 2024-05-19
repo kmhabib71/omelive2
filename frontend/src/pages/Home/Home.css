@@ -1,0 +1,41 @@
+.App {
+    text-align: center;
+  }
+  
+  .video-container {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+  }
+  
+  .video {
+    width: 400px;
+    height: 300px;
+    background-color: black;
+  }
+  
+  .chat-container {
+    margin: 20px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  
+  .chat-message {
+    margin: 10px 0;
+  }
+  
+  .sent {
+    text-align: right;
+    color: blue;
+  }
+  
+  .received {
+    text-align: left;
+    color: green;
+  }
+  
+  input {
+    width: 300px;
+    margin-right: 10px;
+  }
+  
